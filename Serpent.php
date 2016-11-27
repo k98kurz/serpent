@@ -1,7 +1,7 @@
 <?php
 /**
- * Serpent encryption replacement for Crypt
- * @author k98kurz
+ * Serpent encryption library
+ * @author k98kurz - https://github.com/k98kurz
  */
 
 namespace k98kurz\Serpent;
@@ -18,9 +18,10 @@ class Serpent {
 
 	/* some config */
 	private static $cipher = MCRYPT_SERPENT;
-	private static $mode = MCRYPT_MODE_CBC;
+	private static $mode = MCRYPT_MODE_CFB; // use _CFB or _OFB for unpadded ciphertext
 	private static $keylength;
 	private static $ivlength;
+	private static $encryptarraykeys = false;
 
 	/* some input/output stuff */
 	private static $plaintextin;
@@ -32,7 +33,7 @@ class Serpent {
 	public function __construct ()
 	{
 		// set the things
-		self::$masterkey = env('APP_KEY');
+		self::$masterkey = getenv('APP_KEY');
 		self::$key = self::$masterkey;
 		self::$keylength = mcrypt_get_key_size(self::$cipher, self::$mode);
 		self::$ivlength = mcrypt_get_iv_size(self::$cipher, self::$mode);
@@ -68,23 +69,27 @@ class Serpent {
 			elseif (base64_decode(self::$key, true) && strlen(base64_decode(self::$key)) == self::$keylength)
 				self::$key = base64_decode(self::$key);
 			else
-				throw new SerpentKeylengthException("Incorrect key length: $keylength < ".self::$keylength);
+				throw new SerpentKeylengthException("Incorrect key length: $keylength !== ".self::$keylength);
 		}
 
 		// make sure the iv makes sense
 		$ivlength = strlen(self::$iv);
 		if ($ivlength !== self::$ivlength) {
 			// parse hexadecimal and base64, or throw an exception
-			if ($ivlength == self::$ivlength * 2 && ctype_xdigit(self::$iv))
+			if ($ivlength == (self::$ivlength * 2) && ctype_xdigit(self::$iv))
 				self::$iv = hex2bin(self::$iv);
 			elseif (base64_decode(self::$iv, true) && strlen(base64_decode(self::$iv)) == self::$ivlength)
 				self::$iv = base64_decode(self::$iv);
 			else
-				throw new SerpentIVlengthException("Incorrect IV length: $ivlength < ".self::$ivlength);
+				throw new SerpentIVlengthException("Incorrect IV length: $ivlength !== ".self::$ivlength);
 		}
 
 		// return instance for chaining
 		return self::$instance;
+	}
+
+	public static function setArrayOption ($value=true) {
+		self::$encryptarraykeys = $value ? true : false;
 	}
 
 	// some magic
@@ -112,15 +117,42 @@ class Serpent {
 			case 'decrypt':
 				return call_user_func_array('static::decryptStatic', $args);
 				break;
+			case 'encryptHex':
+				return call_user_func_array('static::encryptHexStatic', $args);
+				break;
+			case 'decryptHex':
+				return call_user_func_array('static::decryptHexStatic', $args);
+				break;
 
 			default:
 				break;
 		}
 	}
 
-	// simpler system: just return encrypted shit
-	// returns "{iv};{ct}"
+	// easy system: Serpent::encrypt(string) returns "{iv};{ct}"
+	// Serpent::encrypt(array) returns ['ciphertext' => [], 'iv' => iv]
 	public static function encryptStatic ($value=null, $key=null)
+	{
+		if (empty($value))
+			return '';
+
+		// initialize
+		self::init($key);
+
+		// parse input
+		if (is_string($value) && strlen($value) < self::$ivlength && self::$mode !== MCRYPT_MODE_CBC) {
+			$iv = openssl_random_pseudo_bytes(strlen($value));
+			self::$iv = self::makeIV($iv);
+		} else
+            $iv = self::$iv;
+
+		$ct = self::$instance->encrypt($value)->finalize();
+		return is_array($value) ? ['ciphertext' => $ct['ciphertext'][0], 'iv' => $ct['iv']] :  base64_encode($iv) . ';' . $ct['ciphertext'][0];
+	}
+
+	// easy system: Serpent::encryptHex(string) returns "{iv};{ct}"
+	// Serpent::encrypt(array) returns ['ciphertext' => [], 'iv' => iv]
+	public static function encryptHexStatic ($value=null, $key=null)
 	{
 		if (empty($value))
 			return '';
@@ -135,12 +167,11 @@ class Serpent {
 		} else
             $iv = self::$iv;
 
-		$ct = self::$instance->encrypt($value)->finalize();
-		return is_array($value) ? ['ciphertext' => $ct['ciphertext'][0], 'iv' => $ct['iv']] :  base64_encode($iv) . ';' . $ct['ciphertext'][0];
+		$ct = self::$instance->encrypt($value)->finalizeHex();
+		return is_array($value) ? ['ciphertext' => $ct['ciphertext'][0], 'iv' => $ct['iv']] :  bin2hex($iv) . ';' . $ct['ciphertext'][0];
 	}
 
-	// simpler system: just return decrypted shit
-	// takes "{iv};{ct}" and returns "{pt}"
+	// easy system: Serpent::decrypt(result of Serpent::encrypt() or Serpent::encryptHex())
 	public static function decryptStatic ($value=null, $key=null)
 	{
 		if (empty($value))
@@ -156,7 +187,7 @@ class Serpent {
 				return '';
 			if (ctype_xdigit($value[0]))
 				$value[0] = hex2bin($value[0]);
-			if (base64_decode($value[0], true))
+			elseif (base64_decode($value[0], true))
 				$value[0] = base64_decode($value[0]);
 			if (strlen($value[0]) !== self::$ivlength)
 				self::$iv = self::makeIV($value[0]);
@@ -168,8 +199,49 @@ class Serpent {
 			if (!isset($value['ciphertext']) || !isset($value['iv']))
 				return '';
 			self::$iv = (strlen(base64_decode($value['iv'])) == self::$ivlength) ? base64_decode($value['iv']) : self::makeIV($value['iv']);
-			// self::$iv = base64_decode($value['iv']);
 			$pt = self::$instance->decrypt($value['ciphertext'])->finalize()['plaintext'][0];
+		}
+
+		return $pt;
+	}
+
+	// easy system: Serpent::decrypt(result of Serpent::encrypt() or Serpent::encryptHex())
+	public static function decryptHexStatic ($value=null, $key=null)
+	{
+		if (empty($value))
+			return '';
+
+		// initialize
+		self::init($key);
+
+		// parse input
+		if (is_string($value)) {
+			$value = explode(';', $value);
+			if (count($value) < 2)
+				return '';
+			if (ctype_xdigit($value[0]))
+				$value[0] = hex2bin($value[0]);
+			elseif (base64_decode($value[0], true))
+				$value[0] = base64_decode($value[0]);
+			if (strlen($value[0]) !== self::$ivlength)
+				self::$iv = self::makeIV($value[0]);
+			else
+				self::$iv = $value[0];
+
+			$pt = self::$instance->decrypt($value[1])->finalize()['plaintext'][0];
+		} else {
+			if (!isset($value['ciphertext']) || !isset($value['iv']))
+				return '';
+			if (ctype_xdigit($value[0]))
+				$value[0] = hex2bin($value[0]);
+			elseif (base64_decode($value[0], true))
+				$value[0] = base64_decode($value[0]);
+			elseif (strlen($value[0]) !== self::$ivlength)
+				self::$iv = self::makeIV($value[0]);
+			else
+				self::$iv = $value[0];
+
+			$pt = self::$instance->decrypt($value['ciphertext'])->finalizeHex()['plaintext'][0];
 		}
 
 		return $pt;
@@ -209,8 +281,16 @@ class Serpent {
 		// recursively handle arrays
 		if (is_array($value)) {
 			$ret = [];
-			foreach ($value as $k => $v) {
-				$ret[$k] = $this->doEncrypt($v);
+			if (self::$encryptarraykeys){
+				foreach ($value as $k => $v) {
+					if (is_string($k))
+						$k = $this->doEncrypt($k);
+					$ret[$k] = $this->doEncrypt($v);
+				}
+			} else {
+				foreach ($value as $k => $v) {
+					$ret[$k] = $this->doEncrypt($v);
+				}
 			}
 
 			return $ret;
@@ -225,8 +305,16 @@ class Serpent {
 		// recursively handle arrays
 		if (is_array($value)) {
 			$ret = [];
-			foreach ($value as $k => $v) {
-				$ret[$k] = $this->doDecrypt($v);
+			if (self::$encryptarraykeys) {
+				foreach ($value as $k => $v) {
+					if (is_string($k))
+						$k = $this->doDecrypt($k);
+					$ret[$k] = $this->doDecrypt($v);
+				}
+			} else {
+				foreach ($value as $k => $v) {
+					$ret[$k] = $this->doDecrypt($v);
+				}
 			}
 
 			return $ret;
@@ -234,12 +322,13 @@ class Serpent {
 
 		if (!is_string($value))
 			return '';
-		if (base64_decode($value, true))
-			$value = base64_decode($value);
 		if (ctype_xdigit($value))
 			$value = hex2bin($value);
+		if (base64_decode($value, true))
+			$value = base64_decode($value);
 
 		return mdecrypt_generic(self::$td, $value);
+		// return self::unpad(mdecrypt_generic(self::$td, $value));
 	}
 
 	private function doEncryptHex ($value)
@@ -247,8 +336,16 @@ class Serpent {
 		// recursively handle arrays
 		if (is_array($value)) {
 			$ret = [];
-			foreach ($value as $k => $v) {
-				$ret[$key] = $this->doDecryptHex($v);
+			if (self::$encryptarraykeys) {
+				foreach ($value as $k => $v) {
+					if (is_string($k))
+						$k = $this->doEncryptHex($k);
+					$ret[$k] = $this->doEncryptHex($v);
+				}
+			} else {
+				foreach ($value as $k => $v) {
+					$ret[$k] = $this->doEncryptHex($v);
+				}
 			}
 
 			return $ret;
@@ -258,6 +355,56 @@ class Serpent {
 			return '';
 
 		return bin2hex(mcrypt_generic(self::$td, $value));
+	}
+
+	// note: this outputs hex plaintext
+	private function doDecryptHex ($value)
+	{
+		// recursively handle arrays
+		if (is_array($value)) {
+			$ret = [];
+			if (self::$encryptarraykeys) {
+				foreach ($value as $k => $v) {
+					if (is_string($k))
+						$k = $this->doDecryptHex($k);
+					$ret[$k] = $this->doDecryptHex($v);
+				}
+			} else {
+				foreach ($value as $k => $v) {
+					$ret[$k] = $this->doDecryptHex($v);
+				}
+			}
+
+			return $ret;
+		}
+
+		if (!is_string($value))
+			return '';
+		if (ctype_xdigit($value))
+			$value = hex2bin($value);
+		if (base64_decode($value, true))
+			$value = base64_decode($value);
+
+		return bin2hex(self::unpad(mdecrypt_generic(self::$td, $value)));
+		// return self::unpad(mdecrypt_generic(self::$td, $value));
+	}
+
+	private static function unpad ($value)
+	{
+		// only necessary if using CBC
+		if (self::$mode == MCRYPT_MODE_CBC) {
+			// php does not handle padding correctly in every version,
+			// so this is the only reliable method of unpadding.
+			// SOL if the plaintext ends in null bytes.
+			$start = (ord(substr($value, -1)) > 0) ? strlen($value) - 2 : strlen($value) - 1;
+			for ($i = $start; $i >= 0; --$i) {
+				if (ord($value[$i]) > 0)
+					break; // break on the first non-null byte
+			}
+			return substr($value, 0, $i+1);
+	    }
+
+		return $value;
 	}
 
 	// run the encryption/decryption and return the result
@@ -298,14 +445,15 @@ class Serpent {
 
 		// decryption
 		foreach (self::$ciphertextin as $value) {
-			self::$plaintextout[] = $this->doDecrypt($value);
+			self::$plaintextout[] = $this->doDecryptHex($value);
 		}
 
 		self::$instance = null;
 		return [
 			'ciphertext' => self::$ciphertextout,
 			'plaintext' => self::$plaintextout,
-			'iv' => bin2hex(self::$iv)
+			'iv' => bin2hex(self::$iv),
+			'ivlength' => self::$ivlength
 		];
 	}
 
