@@ -16,9 +16,11 @@ If not using an autoloader, `require_once` both files before the `use` statement
 
 Note that you should have a default encryption key stored in the `APP_KEY` environment variable. If not, you will need to manually specify a key.
 
-### Note About Ciphertext Encoding
+### Note About Ciphertext Encoding and Mcrypt Mode
 
 Encrypted data is returned in base64 by default. It can optionally output hex.
+
+Line 21: `private static $mode = MCRYPT_MODE_CBC;` This will output ciphertext in multiples of the block size. When using CFB or OFB modes, ciphertext will not be padded and the iv supplied will be a seed that matches the length of the input if the input is less than the block size. This is less secure but slightly more efficient in bandwidth/storage space.
 
 ### Encrypt/Decrypt a String
 
