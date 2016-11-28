@@ -18,7 +18,7 @@ class Serpent {
 
 	/* some config */
 	private static $cipher = MCRYPT_SERPENT;
-	private static $mode = MCRYPT_MODE_CFB; // use _CFB or _OFB for unpadded ciphertext
+	private static $mode = MCRYPT_MODE_CBC; // use _CFB or _OFB for unpadded ciphertext
 	private static $keylength;
 	private static $ivlength;
 	private static $encryptarraykeys = false;
@@ -161,7 +161,7 @@ class Serpent {
 		self::init($key);
 
 		// parse input
-		if (is_string($value) && strlen($value) < self::$ivlength) {
+		if (is_string($value) && strlen($value) < self::$ivlength && self::$mode !== MCRYPT_MODE_CBC) {
 			$iv = openssl_random_pseudo_bytes(strlen($value));
 			self::$iv = self::makeIV($iv);
 		} else
@@ -228,7 +228,7 @@ class Serpent {
 			else
 				self::$iv = $value[0];
 
-			$pt = self::$instance->decrypt($value[1])->finalize()['plaintext'][0];
+			$pt = self::$instance->decrypt($value[1])->finalizeHex()['plaintext'][0];
 		} else {
 			if (!isset($value['ciphertext']) || !isset($value['iv']))
 				return '';
