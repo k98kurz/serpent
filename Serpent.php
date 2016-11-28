@@ -198,7 +198,12 @@ class Serpent {
 		} else {
 			if (!isset($value['ciphertext']) || !isset($value['iv']))
 				return '';
-			self::$iv = (strlen(base64_decode($value['iv'])) == self::$ivlength) ? base64_decode($value['iv']) : self::makeIV($value['iv']);
+			if (ctype_xdigit($value['iv']))
+				$iv = hex2bin($value['iv']);
+			elseif (base64_decode($value['iv'], true))
+				$iv = base64_decode($value['iv']);
+			self::$iv = (strlen($iv) == self::$ivlength) ? $iv : self::makeIV($iv);
+
 			$pt = self::$instance->decrypt($value['ciphertext'])->finalize()['plaintext'][0];
 		}
 
@@ -232,14 +237,11 @@ class Serpent {
 		} else {
 			if (!isset($value['ciphertext']) || !isset($value['iv']))
 				return '';
-			if (ctype_xdigit($value[0]))
-				$value[0] = hex2bin($value[0]);
-			elseif (base64_decode($value[0], true))
-				$value[0] = base64_decode($value[0]);
-			elseif (strlen($value[0]) !== self::$ivlength)
-				self::$iv = self::makeIV($value[0]);
-			else
-				self::$iv = $value[0];
+			if (ctype_xdigit($value['iv']))
+				$iv = hex2bin($value['iv']);
+			elseif (base64_decode($value['iv'], true))
+				$iv = base64_decode($value['iv']);
+			self::$iv = (strlen($iv) == self::$ivlength) ? $iv : self::makeIV($iv);
 
 			$pt = self::$instance->decrypt($value['ciphertext'])->finalizeHex()['plaintext'][0];
 		}
