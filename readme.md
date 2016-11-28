@@ -10,11 +10,13 @@ Since I wanted this to be as portable as possible, I decided to keep only the ba
 
 If you use an autoloader, just put the following at the beginning of the file in which you want to use it:
 
-	use k98kurz\Serpent as Serpent;
+	use k98kurz\Serpent\Serpent as Serpent;
 
 If not using an autoloader, `require_once` both files before the `use` statement.
 
-Note that you should have a default encryption key stored in the `APP_KEY` environment variable. If not, you will need to manually specify a key.
+Note that you should have a default encryption key stored in the `APP_KEY` environment variable. If not, you will need to manually specify a key, e.g.
+
+	putenv("APP_KEY=$key");
 
 ### Note About Ciphertext Encoding and Mcrypt Mode
 
